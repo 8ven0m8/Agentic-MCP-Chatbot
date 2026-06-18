@@ -24,7 +24,7 @@ Conversations are persisted to a local SQLite database, allowing users to resume
 - **Web search** via Tavily
 - **Stock price lookup** via Alpha Vantage
 - **Persistent conversation threads** backed by an async SQLite checkpointer
-- **Environment configuration UI** — set API keys directly from the app without touching files manually
+- **Environment configuration UI** set API keys directly from the app without touching files manually
 - **Streaming responses** with live tool-status indicators
 - **Compatible with any OpenAI-compatible LLM endpoint**
 
@@ -66,7 +66,7 @@ MultiServerMCPClient
 **1. Clone the repository**
 
 ```bash
-https://github.com/8ven0m8/Agentic-MCP-Chatbot.git
+git clone https://github.com/8ven0m8/Agentic-MCP-Chatbot.git
 cd Agentic-MCP-Chatbot
 ```
 
