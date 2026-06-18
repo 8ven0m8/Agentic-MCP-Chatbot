@@ -1,6 +1,6 @@
 from langgraph.graph import StateGraph, START, END
 from typing import TypedDict, Annotated
-from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.graph.message import add_messages
@@ -17,8 +17,11 @@ import threading
 
 load_dotenv()
 
+# The objective of the the functions below is to create a bridge between synchronous and asynchronous code. 
+# Streamlit is synchronous, Langgraph and MCP are asynchronous
+
 # Dedicated async loop for backend tasks
-_ASYNC_LOOP = asyncio.new_event_loop()
+_ASYNC_LOOP = asyncio.new_event_loop() # Creates a brand new asyncio loop
 _ASYNC_THREAD = threading.Thread(target=_ASYNC_LOOP.run_forever, daemon=True)
 _ASYNC_THREAD.start()
 
@@ -36,9 +39,7 @@ def submit_async_task(coro):
     return _submit_async(coro)
 
 
-# -------------------
-# 1. LLM
-# -------------------
+################# Configure LLM ##################
 _llm_configured = bool(getenv("LLM_API_KEY") and getenv("LLM_API_URL"))
 
 llm = ChatOpenAI(
@@ -47,9 +48,8 @@ llm = ChatOpenAI(
     model="auto"
 ) if _llm_configured else None
 
-# -------------------
-# 2. Tools
-# -------------------
+
+################## MCP Tools ##################
 search_tool = TavilySearchResults(max_results=10) if getenv("TAVILY_API_KEY") else None
 
 
@@ -76,7 +76,8 @@ client = MultiServerMCPClient(
             "args": [
                 "-y",
                 "@modelcontextprotocol/server-filesystem",
-                *filesystem_dirs,
+                *filesystem_dirs, # This is pointing to a list of directories, this is done because the directories 
+                                  # list can be edited in env file and also the inbuilt settings (If it fails, just remove this and put the directories list direrctly)
             ],
             "transport": "stdio",
         },
@@ -95,6 +96,7 @@ client = MultiServerMCPClient(
             "transport": "stdio",
             "command": "npx",
             "args": ["-y", "@sowonai/mcp-gmail"],
+            # Gmail provides a json file with all 3 of the keys mentioned, so just copy paste each key in the env file
             "env": {
                 "GOOGLE_CLIENT_ID": getenv("CLIENT_ID"),
                 "GOOGLE_CLIENT_SECRET": getenv("CLIENT_SECRET"),
@@ -104,33 +106,30 @@ client = MultiServerMCPClient(
     }
 )
 
-
+# loads all the tools from MCP servers
 def load_mcp_tools() -> list[BaseTool]:
     try:
         return run_async(client.get_tools())
     except Exception:
         return []
 
-
+# loads tools only when LLM is configured.
 mcp_tools = load_mcp_tools() if _llm_configured else []
 
 tools = [t for t in [search_tool, get_stock_price, *mcp_tools] if t is not None] if _llm_configured else []
 llm_with_tools = llm.bind_tools(tools) if tools else llm
 
-# -------------------
-# 3. State
-# -------------------
+# define state, In a chatbot you provide the previous messages as well thats why we have to annotate the messages.
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
-# -------------------
-# 4. Nodes
-# -------------------
+
+# This decides whether to directly provide a response or use tools and generate a response.
 async def chat_node(state: ChatState):
+    """LLM node that may answer or request a tool call."""
     if not llm_with_tools:
         from langchain_core.messages import AIMessage
         return {"messages": [AIMessage(content="⚠️ LLM not configured. Please set your API keys in Settings and restart.")]}
-    """LLM node that may answer or request a tool call."""
     messages = state["messages"]
     response = await llm_with_tools.ainvoke(messages)
     return {"messages": [response]}
@@ -138,11 +137,8 @@ async def chat_node(state: ChatState):
 
 tool_node = ToolNode(tools) if tools else None
 
-# -------------------
-# 5. Checkpointer
-# -------------------
 
-
+# Its exactly what the name suggests. everytime graph processes a message, checkpointer saves a snapshot of the full message history
 async def _init_checkpointer():
     conn = await aiosqlite.connect(database="chatbot.db")
     return AsyncSqliteSaver(conn)
@@ -150,9 +146,7 @@ async def _init_checkpointer():
 
 checkpointer = run_async(_init_checkpointer())
 
-# -------------------
-# 6. Graph
-# -------------------
+# Defining graph
 graph = StateGraph(ChatState)
 graph.add_node("chat_node", chat_node)
 graph.add_edge(START, "chat_node")
@@ -166,9 +160,7 @@ else:
 
 chatbot = graph.compile(checkpointer=checkpointer)
 
-# -------------------
-# 7. Helper
-# -------------------
+# Helper functions
 async def _alist_threads():
     seen = set()
     threads = []
@@ -182,6 +174,6 @@ async def _alist_threads():
 
     return threads
 
-
+# deduplicating repeated checkpoints down to one entry per conversation
 def retrieve_all_threads():
     return run_async(_alist_threads())
